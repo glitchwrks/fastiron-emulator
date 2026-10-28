@@ -1,0 +1,34 @@
+---
+# Copyright: (c) 2026, Glitch Works, LLC
+# GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The two emulated switches, for playbooks using glitchwrks.fastiron. The
+# login account picks the switch; host names match the hostnames in states/.
+fastiron:
+  hosts:
+    cs1a.example.net:
+      ansible_user: cs1a
+    cs1b.example.net:
+      ansible_user: cs1b
+  vars:
+    ansible_host: 127.0.0.1
+    ansible_port: 2222
+    ansible_connection: ansible.netcommon.network_cli
+    ansible_network_os: glitchwrks.fastiron.fastiron
+    ansible_network_cli_ssh_type: libssh
+    ansible_libssh_key_exchange_algorithms: +diffie-hellman-group1-sha1
+    ansible_libssh_hostkeys: +ssh-rsa
+    ansible_libssh_publickey_algorithms: +ssh-rsa
+    ansible_private_key_file: /var/lib/fastiron-emulator/client_rsa
+    ansible_host_key_checking: false
+    ansible_become: true
+    ansible_become_method: ansible.netcommon.enable
+    # The enable password in states/; not a real one.
+    ansible_become_password: EnPass9
+
+# The MCT pair, for group_vars such as fastiron_group.
+fastiron_alb:
+  hosts:
+    cs1a.example.net:
+    cs1b.example.net:
