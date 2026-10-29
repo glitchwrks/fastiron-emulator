@@ -37,13 +37,21 @@ OPENERS = {'vlan', 'cluster', 'lag', 'interface'}
 #     still open or not. Refused connections don't extend the wait. 0 for none.
 #   factory_name: the prompt's name before a hostname is set, or None where
 #     it hasn't been captured (the emulator then shows "Router").
+#   lag_name_quotes: whether LAG names are shown quoted, lag "name" ...
+#   lag_member_names: whether deploying a LAG moves its ports' names into the
+#     LAG, as "port-name NAME ethernet PORT", and drops its secondary ports'
+#     interface blocks (they run at the primary port's settings).
 MODELS = {
-    'ICX6650': {'ssh_refusal_seconds': 0, 'factory_name': 'ICX6650-64 Router'},
+    'ICX6650': {'ssh_refusal_seconds': 0, 'factory_name': 'ICX6650-64 Router',
+                'lag_name_quotes': True, 'lag_member_names': False},
     # Measured on an ICX6610-48P running 08.0.30uT7f3: refused for 13 seconds
     # after the last accepted connection in one test, and 40 to 45 seconds,
     # steadily over three minutes, in a later one, after many failed logins.
     # The longer, so tests cover the worst seen.
-    'ICX6610': {'ssh_refusal_seconds': 45, 'factory_name': None},
+    # It also shows LAG names unquoted, and moves deployed LAGs' port names
+    # into the LAG.
+    'ICX6610': {'ssh_refusal_seconds': 45, 'factory_name': None,
+                'lag_name_quotes': False, 'lag_member_names': True},
 }
 DEFAULT_MODEL = 'ICX6650'
 
@@ -330,6 +338,41 @@ def deployed_lags(tree):
     return lags
 
 
+def lag_name(text):
+    return text.split()[1].strip('"')
+
+
+def lag_members(children):
+    members = [p for c in children if c[0].startswith('ports ') for p in parse_ports(c[0].split()[1:])]
+    primary = next((c[0].split()[1] for c in children if c[0].startswith('primary-port ')),
+                   members[0] if members else None)
+    return primary, members
+
+
+def move_member_names(tree, lag):
+    """What an ICX 6610 does on deploy: its ports' names go into the LAG, and the
+    secondary ports' interface blocks are dropped."""
+    primary, members = lag_members(lag[1])
+    for port in members:
+        block = next((c for c in tree if c[0] == 'interface ethernet %s' % port), None)
+        if block is None:
+            continue
+        name = next((c[0].split(None, 1)[1] for c in block[1] if c[0].startswith('port-name ')), None)
+        if name is not None:
+            set_lag_port_name(lag[1], port, name)
+        if port != primary:
+            tree.remove(block)
+
+
+def set_lag_port_name(children, port, name):
+    line = 'port-name %s ethernet %s' % (name, port)
+    for child in children:
+        if child[0].startswith('port-name ') and child[0].split()[-1] == port:
+            child[0] = line
+            return
+    children.append([line, []])
+
+
 def main():
     original = os.environ.get('SSH_ORIGINAL_COMMAND', '')
     if original.startswith('scp '):
@@ -483,7 +526,23 @@ def main():
                 node = find(tree, config_path)
                 node[:] = [c for c in node if c[0] != ' '.join(words[1:])]
                 commit()
+            elif (config_path and config_path[0].startswith('lag ') and len(config_path) == 1
+                  and words[0] == 'port-name' and len(words) > 3 and words[-2].startswith('ethe')):
+                lag = next(c for c in tree if c[0] == config_path[0])
+                set_lag_port_name(lag[1], words[-1], ' '.join(words[1:-2]))
+                commit()
             else:
+                if words[0] == 'lag' and len(words) > 1 and not config_path:
+                    # The same LAG, however its name is quoted, shown as the model shows it.
+                    existing = next((c for c in tree if c[0].startswith('lag ') and lag_name(c[0]) == lag_name(cmd)),
+                                    None)
+                    if existing is not None:
+                        cmd = existing[0]
+                    else:
+                        name = lag_name(cmd)
+                        rest = cmd.split(None, 2)[2] if len(words) > 2 else ''
+                        cmd = ('lag "%s" %s' if model(state)['lag_name_quotes'] else 'lag %s %s') % (name, rest)
+                    words = cmd.split()
                 if words[:2] == ['enable', 'super-user-password'] and not config_path:
                     state['enable_password'] = words[2]
                     cmd = 'enable super-user-password .....'
@@ -495,6 +554,10 @@ def main():
                     if words[0] == 'hostname':
                         node[:] = [c for c in node if not c[0].startswith('hostname ')]
                     node.append([cmd, []])
+                    commit()
+                if (cmd == 'deploy' and config_path and config_path[0].startswith('lag ') and len(config_path) == 1
+                        and model(state)['lag_member_names']):
+                    move_member_names(tree, next(c for c in tree if c[0] == config_path[0]))
                     commit()
                 opens = words[0] in OPENERS if not config_path else (
                     config_path[0].startswith('cluster ') and words[0] == 'client' and len(config_path) == 1)
