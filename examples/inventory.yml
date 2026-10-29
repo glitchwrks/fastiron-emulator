@@ -3,14 +3,18 @@
 # GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The two emulated switches, for playbooks using glitchwrks.fastiron. The
-# login account picks the switch; host names match the hostnames in states/.
+# The emulated switches, for playbooks using glitchwrks.fastiron. The login
+# account picks the switch; host names match the hostnames in states/. cs2, an
+# ICX 6610, has its own port, for the gate that emulates its SSH server.
 fastiron:
   hosts:
     cs1a.example.net:
       ansible_user: cs1a
     cs1b.example.net:
       ansible_user: cs1b
+    cs2.example.net:
+      ansible_user: cs2
+      ansible_port: 2223
   vars:
     ansible_host: 127.0.0.1
     ansible_port: 2222

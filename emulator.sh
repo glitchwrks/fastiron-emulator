@@ -9,8 +9,9 @@
 #
 #   ./emulator.sh setup   create the accounts, keys and sshd configuration,
 #                         and copy the switch states in
-#   ./emulator.sh start   start sshd (on 127.0.0.1, port FI_PORT)
-#   ./emulator.sh stop    stop it
+#   ./emulator.sh start   start sshd (on 127.0.0.1, port FI_PORT), and a gate
+#                         for each switch whose state has an ssh_port
+#   ./emulator.sh stop    stop them
 #   ./emulator.sh reset   copy the switch states in again, undoing changes
 #
 # Settings, from the environment:
@@ -28,6 +29,14 @@ switches() {
     for state in "$repo"/states/*.json; do
         basename "$state" .json
     done
+}
+
+# The switch's own SSH port, if its state has one. Such a switch is reached
+# through fastiron_ssh_gate.py, which emulates what its model does before
+# login; the others are reached on sshd's port directly.
+ssh_port() {
+    python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("ssh_port", ""))' \
+        "$repo/states/$1.json"
 }
 
 # Each switch's state, with the client key as its SSH key list, as if the key
@@ -61,8 +70,8 @@ setup() {
 
     mkdir -p "$run" /run/sshd
     chmod 755 "$run"
-    cp "$repo/fastiron_emulator.py" "$run/"
-    chmod 755 "$run/fastiron_emulator.py"
+    cp "$repo/fastiron_emulator.py" "$repo/fastiron_ssh_gate.py" "$run/"
+    chmod 755 "$run/fastiron_emulator.py" "$run/fastiron_ssh_gate.py"
 
     # FastIron 08.0.30 only offers RSA host keys and these old algorithms.
     [ -f "$run/host_rsa" ] || ssh-keygen -q -t rsa -b 2048 -N '' -f "$run/host_rsa"
@@ -100,13 +109,22 @@ setup() {
 start() {
     /usr/sbin/sshd -f "$run/sshd_config" -E "$run/sshd.log"
     echo "Listening on 127.0.0.1:$port"
+    for switch in $(switches); do
+        gate_port=$(ssh_port "$switch")
+        [ -n "$gate_port" ] || continue
+        python3 "$run/fastiron_ssh_gate.py" "$run/state/$switch.json" "$gate_port" "$port" \
+            >>"$run/gate-$switch.log" 2>&1 &
+        echo $! >"$run/gate-$switch.pid"
+        echo "$switch: listening on 127.0.0.1:$gate_port"
+    done
 }
 
 stop() {
-    if [ -f "$run/sshd.pid" ]; then
-        kill "$(cat "$run/sshd.pid")" 2>/dev/null || true
-        rm -f "$run/sshd.pid"
-    fi
+    for pidfile in "$run/sshd.pid" "$run"/gate-*.pid; do
+        [ -f "$pidfile" ] || continue
+        kill "$(cat "$pidfile")" 2>/dev/null || true
+        rm -f "$pidfile"
+    done
 }
 
 case ${1:-} in
