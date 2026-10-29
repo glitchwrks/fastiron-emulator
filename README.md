@@ -1,7 +1,7 @@
 FastIron emulator
 =================
 
-A small emulator of the Brocade / Ruckus FastIron 08.0.30 CLI, as seen over SSH on ICX 6650 switches, for testing Ansible content that manages them before it touches real switches. It backs the end-to-end tests of [glitchwrks.fastiron](https://github.com/glitchwrks/glitchwrks.fastiron), the FastIron roles in [gw.general](https://github.com/glitchwrks/gw.general), and the playbooks that use them.
+A small emulator of the Brocade / Ruckus FastIron 08.0.30 CLI, as seen over SSH on ICX 6650 and ICX 6610 switches, for testing Ansible content that manages them before it touches real switches. It backs the end-to-end tests of [glitchwrks.fastiron](https://github.com/glitchwrks/glitchwrks.fastiron), the FastIron roles in [gw.general](https://github.com/glitchwrks/gw.general), and the playbooks that use them.
 
 It is not a switch simulator. Configuration commands edit a stored running configuration, and the rest of the switch's state, such as `show cluster`, is canned text in a state file that a test sets up. What it does emulate closely is the CLI's behavior where that has tripped up Ansible: prompts, paging, odd output layouts, and the commands FastIron refuses.
 
@@ -17,6 +17,7 @@ What it emulates
 * `show running-config`, `show version`, `show who` (laid out with tabs, as FastIron does), `show ip client-pub-key`, `show cluster` and `show interface brief`. The last two print canned text from the state file.
 * SCP upload of the SSH public key list, as strict as FastIron: the target must be exactly `sshPubKey`. An upload replaces the switch's authorized keys.
 * Key logins and password logins are told apart, and password logins are refused when the configuration has `ip ssh password-authentication no`.
+* Differences between models, picked by a state's `model`. An ICX 6610 (08.0.30uT7f3) refuses any new SSH connection for about 13 seconds after accepting one, whether that one is still open or not: it reads the client's version line and closes, which libssh reports as `Socket error: disconnected`. Refused connections don't extend the wait. An ICX 6650 accepts connections back to back. The models are in `MODELS` in `fastiron_emulator.py`.
 
 Each error message is the switch's own text, taken from captured sessions.
 
@@ -28,11 +29,11 @@ It runs behind its own sshd, with one login account per switch, so it needs a di
     ./emulator.sh setup
     ./emulator.sh start
 
-`setup` creates the accounts `cs1a` and `cs1b`, one for each file in `states/`, a host key and a client key, and the sshd configuration, all in `/var/lib/fastiron-emulator` (`FI_RUN_DIR`). sshd listens on 127.0.0.1, port 2222 (`FI_PORT`). Run `setup` again after changing the emulator, to install the new version.
+`setup` creates the accounts `cs1a`, `cs1b` and `cs2`, one for each file in `states/`, a host key and a client key, and the sshd configuration, all in `/var/lib/fastiron-emulator` (`FI_RUN_DIR`). sshd listens on 127.0.0.1, port 2222 (`FI_PORT`). A switch whose state has an `ssh_port` is reached on that port instead, through `fastiron_ssh_gate.py`, which `start` runs for it: the gate emulates what the switch's model does before login, and passes connections through to sshd. Run `setup` again after changing the emulator, to install the new version.
 
-`./emulator.sh reset` puts the switches' states back as they are in `states/`, undoing changes made by tests. `./emulator.sh stop` stops sshd.
+`./emulator.sh reset` puts the switches' states back as they are in `states/`, undoing changes made by tests. `./emulator.sh stop` stops sshd and the gates.
 
-`examples/inventory.yml` points glitchwrks.fastiron at the two switches. Log in by hand with:
+`examples/inventory.yml` points glitchwrks.fastiron at the three switches. Log in by hand with:
 
     ssh -i /var/lib/fastiron-emulator/client_rsa -p 2222 \
         -o KexAlgorithms=+diffie-hellman-group1-sha1 -o HostKeyAlgorithms=+ssh-rsa \
@@ -42,10 +43,17 @@ It runs behind its own sshd, with one login account per switch, so it needs a di
 The switches
 ------------
 
-`states/` holds an MCT pair, cs1a and cs1b, in a healthy state: cluster ALB-CORE with its ICL on LAG 2 (1/1/7 and 1/1/8), keep-alive VLAN 3001 on its own link (1/1/40), and one client, c2960g, on 1/1/2. Each state file is JSON:
+`states/` holds:
+
+* An MCT pair of ICX 6650s, cs1a and cs1b, in a healthy state: cluster ALB-CORE with its ICL on LAG 2 (1/1/7 and 1/1/8), keep-alive VLAN 3001 on its own link (1/1/40), and one client, c2960g, on 1/1/2.
+* A single ICX 6610, cs2, on its own port, 2223: an access-layer switch with port names, a dual-mode trunk and a management VE, and the 6610's connection refusals.
+
+Each state file is JSON:
 
 | Key | What it is |
 | --- | --- |
+| `model` | `ICX6650` (the default) or `ICX6610`: the behavior that differs between models, from `MODELS` in `fastiron_emulator.py`. A state can override a model's value with a key of the same name, such as `ssh_refusal_seconds`. |
+| `ssh_port` | Optional: the switch's own port, through `fastiron_ssh_gate.py`. Needed for behavior before login, such as `ssh_refusal_seconds`. |
 | `running` | The running configuration, without the `Current configuration` header and `end`. Configuration commands change it. |
 | `version` | `show version` output. |
 | `show_cluster`, `show_interface_brief` | Canned output of those commands. |

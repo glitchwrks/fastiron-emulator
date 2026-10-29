@@ -13,6 +13,10 @@ The switch's state (running configuration, canned "show" output, test hooks)
 is the JSON file named by FI_STATE, and changes persist there, so separate
 sessions see them. FI_AUTHORIZED_KEYS names the authorized_keys file that an
 SCP upload of sshPubKey replaces.
+
+A state's "model" picks the hardware's behavior, from MODELS; the default is
+an ICX 6650. Behavior that happens before login, such as refusing
+connections, is up to fastiron_ssh_gate.py, which reads MODELS too.
 """
 import base64
 import json
@@ -26,6 +30,30 @@ STATE = os.environ.get('FI_STATE', 'fi_state.json')
 AUTHORIZED_KEYS = os.environ.get('FI_AUTHORIZED_KEYS', 'authorized_keys')
 KEY_BLOCK_RE = re.compile(r'---- BEGIN SSH2 PUBLIC KEY ----([\s\S]*?)---- END SSH2 PUBLIC KEY ----')
 OPENERS = {'vlan', 'cluster', 'lag', 'interface'}
+
+# What differs between the emulated models, from captured sessions.
+#   ssh_refusal_seconds: after accepting an SSH connection, the switch drops
+#     any new one for this long, during key exchange, whether the first is
+#     still open or not. Refused connections don't extend the wait. 0 for none.
+#   factory_name: the prompt's name before a hostname is set, or None where
+#     it hasn't been captured (the emulator then shows "Router").
+MODELS = {
+    'ICX6650': {'ssh_refusal_seconds': 0, 'factory_name': 'ICX6650-64 Router'},
+    # Measured on an ICX6610-48P running 08.0.30uT7f3: refused for about 13
+    # seconds after the last accepted connection.
+    'ICX6610': {'ssh_refusal_seconds': 13, 'factory_name': None},
+}
+DEFAULT_MODEL = 'ICX6650'
+
+
+def model(state):
+    """The behavior of a state's model; a state's own keys override it."""
+    name = state.get('model', DEFAULT_MODEL)
+    if name not in MODELS:
+        raise SystemExit('unknown model %r, expected one of %s' % (name, ', '.join(sorted(MODELS))))
+    behavior = dict(MODELS[name])
+    behavior.update({key: state[key] for key in behavior if key in state})
+    return behavior
 
 
 def out(text=''):
@@ -314,7 +342,7 @@ def main():
         for text, _ in tree:
             if text.startswith('hostname '):
                 return text.split()[1]
-        return state.get('factory_name', 'ICX6650-64 Router')
+        return model(state)['factory_name'] or 'Router'
 
     def prompt():
         if config_path is None:
