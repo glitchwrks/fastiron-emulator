@@ -39,11 +39,17 @@ OPENERS = {'vlan', 'cluster', 'lag', 'interface'}
 #     it hasn't been captured (the emulator then shows "Router").
 MODELS = {
     'ICX6650': {'ssh_refusal_seconds': 0, 'factory_name': 'ICX6650-64 Router'},
-    # Measured on an ICX6610-48P running 08.0.30uT7f3: refused for about 13
-    # seconds after the last accepted connection.
-    'ICX6610': {'ssh_refusal_seconds': 13, 'factory_name': None},
+    # Measured on an ICX6610-48P running 08.0.30uT7f3: refused for 13 seconds
+    # after the last accepted connection in one test, and 40 to 45 seconds,
+    # steadily over three minutes, in a later one, after many failed logins.
+    # The longer, so tests cover the worst seen.
+    'ICX6610': {'ssh_refusal_seconds': 45, 'factory_name': None},
 }
 DEFAULT_MODEL = 'ICX6650'
+
+# Global settings that are on by default: turning one off shows "no ..." in
+# the running configuration, as captured from the switches.
+DEFAULT_ON = {'telnet server', 'web-management http'}
 
 
 def model(state):
@@ -466,6 +472,13 @@ def main():
                     clients = [i for i, c in enumerate(node) if c[0].startswith('client ')]
                     node.insert(clients[0] if clients else len(node), ['deploy', []])
                     commit()
+            elif not config_path and (' '.join(words[1:]) in DEFAULT_ON and words[0] == 'no'
+                                      or ' '.join(words) in DEFAULT_ON):
+                setting = ' '.join(words[1:]) if words[0] == 'no' else ' '.join(words)
+                tree[:] = [c for c in tree if c[0] not in (setting, 'no ' + setting)]
+                if words[0] == 'no':
+                    tree.append(['no ' + setting, []])
+                commit()
             elif words[0] == 'no' and len(words) > 1:
                 node = find(tree, config_path)
                 node[:] = [c for c in node if c[0] != ' '.join(words[1:])]
