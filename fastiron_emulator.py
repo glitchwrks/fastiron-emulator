@@ -553,7 +553,12 @@ def main():
                     # a new hostname replaces the old one
                     if words[0] == 'hostname':
                         node[:] = [c for c in node if not c[0].startswith('hostname ')]
-                    node.append([cmd, []])
+                    if words[0] == 'lag' and not config_path:
+                        # FastIron shows LAGs ahead of the VLANs.
+                        vlans = [i for i, c in enumerate(node) if c[0].startswith('vlan ')]
+                        node.insert(vlans[0] if vlans else len(node), [cmd, []])
+                    else:
+                        node.append([cmd, []])
                     commit()
                 if (cmd == 'deploy' and config_path and config_path[0].startswith('lag ') and len(config_path) == 1
                         and model(state)['lag_member_names']):
